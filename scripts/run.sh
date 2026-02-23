@@ -79,6 +79,51 @@ echo "Tools run:    ${TOOLS_RUN}"
 echo "Total issues: ${TOTAL_ISSUES}"
 echo "Health score: ${HEALTH_LEVEL} (${HEALTH_SCORE}%)"
 
+# Paid tier: send report to API and fetch trends
+TREND_INFO=""
+if [ -n "${SPECTREHUB_LICENSE_KEY:-}" ] && [ -f "$REPORT_FILE" ] && [ -s "$REPORT_FILE" ]; then
+  API_URL="${SPECTREHUB_API_URL:-https://api.spectrehub.dev}"
+  REPO_NAME="${GITHUB_REPOSITORY:-unknown}"
+
+  echo ""
+  echo "=== Paid Tier: Sending report to API ==="
+
+  # Build API payload
+  API_PAYLOAD=$(jq -n \
+    --arg repo "$REPO_NAME" \
+    --argjson tools "${TOOLS_RUN}" \
+    --argjson issues "${TOTAL_ISSUES}" \
+    --argjson score "${HEALTH_SCORE}" \
+    --arg health "${HEALTH_LEVEL}" \
+    --arg raw "$(cat "$REPORT_FILE")" \
+    '{repo: $repo, total_tools: $tools, issues: $issues, score: $score, health: $health, raw_json: $raw}')
+
+  # POST report
+  API_RESPONSE=$(curl -fsSL -X POST "${API_URL}/v1/reports" \
+    -H "Authorization: Bearer ${SPECTREHUB_LICENSE_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "$API_PAYLOAD" 2>/dev/null || echo '{"error":"api unreachable"}')
+  echo "API response: ${API_RESPONSE}"
+
+  # Fetch trends for PR comment enrichment
+  TREND_RESPONSE=$(curl -fsSL "${API_URL}/v1/trends?repo=${REPO_NAME}&days=30" \
+    -H "Authorization: Bearer ${SPECTREHUB_LICENSE_KEY}" 2>/dev/null || echo '{"trends":[]}')
+
+  TREND_COUNT=$(echo "$TREND_RESPONSE" | jq '.trends | length' 2>/dev/null || echo "0")
+  if [ "$TREND_COUNT" -gt 1 ]; then
+    PREV_ISSUES=$(echo "$TREND_RESPONSE" | jq '.trends[-2].issues // 0' 2>/dev/null || echo "0")
+    TREND_INFO="Previous run: ${PREV_ISSUES} issues"
+    if [ "$TOTAL_ISSUES" -lt "$PREV_ISSUES" ]; then
+      TREND_INFO="${TREND_INFO} (improving)"
+    elif [ "$TOTAL_ISSUES" -gt "$PREV_ISSUES" ]; then
+      TREND_INFO="${TREND_INFO} (degrading)"
+    else
+      TREND_INFO="${TREND_INFO} (stable)"
+    fi
+    echo "Trend: ${TREND_INFO}"
+  fi
+fi
+
 # Store report in step summary
 if [ -f "$REPORT_FILE" ] && [ -s "$REPORT_FILE" ]; then
   {
@@ -98,6 +143,14 @@ if [ -f "$REPORT_FILE" ] && [ -s "$REPORT_FILE" ]; then
       echo "| Tool | Issues |"
       echo "|------|--------|"
       jq -r '.summary.issues_by_tool // {} | to_entries[] | "| \(.key) | \(.value) |"' "$REPORT_FILE"
+      echo ""
+    fi
+
+    # Trend info (paid tier)
+    if [ -n "$TREND_INFO" ]; then
+      echo "#### Trend"
+      echo ""
+      echo "${TREND_INFO}"
       echo ""
     fi
 
