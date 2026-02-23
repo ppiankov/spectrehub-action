@@ -1,0 +1,83 @@
+name: 'SpectreHub Audit'
+description: 'Discover, run, and aggregate infrastructure audits with SpectreHub'
+author: 'ppiankov'
+
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  tools:
+    description: 'Comma-separated list of spectre tools to install and run. Use "auto" to run all discovered tools.'
+    required: false
+    default: 'auto'
+  spectrehub-version:
+    description: 'SpectreHub version to install (e.g., "v0.2.0" or "latest")'
+    required: false
+    default: 'latest'
+  threshold:
+    description: 'Fail if total issues exceed this number (0 = disabled)'
+    required: false
+    default: '0'
+  format:
+    description: 'Output format: text, json, or both'
+    required: false
+    default: 'text'
+  comment:
+    description: 'Post results as a PR comment (true/false)'
+    required: false
+    default: 'true'
+  license-key:
+    description: 'SpectreHub license key for paid tier features'
+    required: false
+    default: ''
+
+outputs:
+  total-issues:
+    description: 'Total number of issues found'
+    value: ${{ steps.run.outputs.total_issues }}
+  health-score:
+    description: 'Health score percentage (0-100)'
+    value: ${{ steps.run.outputs.health_score }}
+  health-level:
+    description: 'Health level: excellent, good, warning, critical, severe'
+    value: ${{ steps.run.outputs.health_level }}
+  tools-run:
+    description: 'Number of tools that ran successfully'
+    value: ${{ steps.run.outputs.tools_run }}
+  report-json:
+    description: 'Path to the JSON report file'
+    value: ${{ steps.run.outputs.report_json }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install SpectreHub
+      shell: bash
+      run: |
+        ${{ github.action_path }}/scripts/install-spectrehub.sh \
+          "${{ inputs.spectrehub-version }}"
+
+    - name: Install spectre tools
+      shell: bash
+      run: |
+        ${{ github.action_path }}/scripts/install-tools.sh \
+          "${{ inputs.tools }}"
+
+    - name: Run SpectreHub
+      id: run
+      shell: bash
+      env:
+        SPECTREHUB_LICENSE_KEY: ${{ inputs.license-key }}
+      run: |
+        ${{ github.action_path }}/scripts/run.sh \
+          "${{ inputs.threshold }}" \
+          "${{ inputs.format }}"
+
+    - name: Post PR comment
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        ${{ github.action_path }}/scripts/comment.sh
